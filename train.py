@@ -49,7 +49,7 @@ train_dataset = TextMotionDataset(
 
 val_dataset = TextMotionDataset(
     path = './dataset/annotations/humanml3d', 
-    split = 'test',
+    split = 'val',
     max_len = args.max_length,
     tokenizer=temollm.model.tokenizer,
     motion_loader = motion_loader,

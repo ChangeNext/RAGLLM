@@ -6,11 +6,10 @@ import numpy as np
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 from typing import Dict, List, Optional, Union, Callable, Any
-
+from src import utils
 from src.model.encdec import Encoder
 from src.model.ACTOR import ACTORStyleEncoder
 from src.model.attention import JointCrossAttentionBlock
-
 from transformers import (
     Trainer, 
     PreTrainedModel, 
@@ -88,6 +87,8 @@ class TeMoLLM_Config(PretrainedConfig):
                  dataname: str = "t2m",
                  train_mode: str = True,
                  motion_tmr_hidden_size: int = 256,
+                 max_length: int = 32,\
+                 input_prompt: Optional[str] = None,
                  lora_config: Dict = None,
                  **kwconfig):
         super().__init__(**kwconfig)
@@ -98,6 +99,8 @@ class TeMoLLM_Config(PretrainedConfig):
         self.motion_tmr_hidden_size = motion_tmr_hidden_size
         self.dataname = dataname
         self.lora_config = lora_config
+        self.input_prompt = input_prompt
+        self.max_length = max_length
         self.train_mode = train_mode
 
 
@@ -294,13 +297,19 @@ class TeMoLLM:
     def __init__(self,
                  model_kwargs: Optional[Dict],
                  max_length: int = 32,
+                 device: Optional[str] = None,
                  **kwargs: Any):
         super().__init__()
         
         self.max_length = max_length
         
         self.model = TeMoLLM_Model(config = model_kwargs)
-
+        self.device = device
+    
+    def cuda(self):
+        self.model = self.model.to(torch.device(self.device))
+        return self
+    
     def fit(self, 
             train_ds: Dataset,
             valid_ds: Optional[Dataset] = None,
@@ -354,6 +363,50 @@ class TeMoLLM:
         )
         trainer.train()
         self.model.save_pretrained(output_dir)
+    
+    def Text_Motion_Retrieval(self, prompt, max_mot_per_ret):
+        prompt += self.model.tokenizer.eos_token
+
+        print(prompt)
+        tokenized_data = self.model.tokenizer(prompt, return_tensors="pt").to(self.model.logit_scale.device)
+        
+        caption_len = tokenized_data.attention_mask[0].sum()
+        last_embedding_idx = caption_len - 1
+        input_ids = tokenized_data.input_ids.squeeze(1).cuda()
+        attention_mask = tokenized_data.attention_mask.squeeze(1).cuda()
+        output = self.model.lm(input_ids = input_ids, 
+                         attention_mask = attention_mask,
+                         output_hidden_states=True)
+        
+        hidden_states = []
+        for idx, fc_layer in zip(self.model.args.text_emb_layers, self.model.ret_text_hidden_fcs):
+                hidden_states.append(fc_layer(output.hidden_states[idx]))  # (N, seq_len, 2048)
+
+        last_hidden_state = torch.stack(hidden_states, dim=-1).sum(dim=-1)
+        last_embedding = last_hidden_state[0, last_embedding_idx, :]
+        last_embedding = last_embedding / last_embedding.norm(dim=0, keepdim=True)
+        
+        scores = last_embedding @ self.emb_matrix.T
+    
+        # print("############")
+        # print(scores)
+        _, top_motion_idx = scores.topk(max_mot_per_ret)
+        return_outputs = []
+        motion_outputs = []
+        for mot_idx in top_motion_idx:
+                #Fine the first image that does not error out.
+                try:
+                    # seen_motion_idx.append(mot_idx)
+                    motion = self.path_array[mot_idx]
+                    motion_outputs.append(motion)
+                    if len(motion_outputs) == max_mot_per_ret:
+                        break
+                except:
+                    pass
+                
+        return_outputs.append(motion_outputs)
+        
+        return return_outputs
 
 
     @staticmethod
@@ -367,6 +420,8 @@ class TeMoLLM:
     def save_config(self, fpath: str):
         with open(fpath, 'w', encoding='utf-8') as writer:
             json.dump(self.__cfg, writer, ensure_ascii=False, indent=2)
+
+
 
 class EvaluateCallback(TrainerCallback):
     """
@@ -399,7 +454,6 @@ class EvaluateCallback(TrainerCallback):
         self.logger= logger
         self.best_t2m_R1 = 0
         self.best_m2t_R1 = 0
-
     def on_epoch_end(self, args, state, control, **kwargs):
         metrics = self.evaluate_fn(protocol="normal", dataset=self.valid_ds, threshold=0.95, model=self.model, device="cuda", save_dir = self.save_dir, train_mode = True, batch_size=128, logger=self.logger)
         
@@ -407,9 +461,92 @@ class EvaluateCallback(TrainerCallback):
         current_m2t_R1 = metrics[0]["m2t/R01"]
 
         if (current_t2m_R1 > self.best_t2m_R1) and (current_m2t_R1 > self.best_m2t_R1):
-            best_t2m_R1 = current_t2m_R1
-            best_m2t_R1 = current_m2t_R1
-            print(f"New best t2m/R01 : {best_t2m_R1} m2t/R01: {best_m2t_R1}__{state}")
+            is_best = current_t2m_R1 > self.best_t2m_R1
+            self.best_t2m_R1 = current_t2m_R1
+            self.best_m2t_R1 = current_m2t_R1
+            print(f"New best t2m/R01 : {self.best_t2m_R1} m2t/R01: {self.best_m2t_R1}")
             if self.save_dir is not None:
-                self.model.save_pretrained(self.save_dir)
+                utils.save_checkpoint({
+                    'state_dict': self.model.state_dict(),
+                    'best_score': self.best_t2m_R1}, is_best, os.path.join(self.save_dir, 'ckpt'))
                 print(f'save to {self.save_dir}')
+
+from collections import namedtuple
+def load_TeMoLLM(model_dir: str) -> TeMoLLM:
+    model_args_path = os.path.join(model_dir, 'config.json')
+    model_ckpt_path = os.path.join(model_dir, 'ckpt_best.pth.tar')
+
+    if not os.path.exists(model_args_path):
+        raise ValueError(f'model_args.json does not exist in {model_dir}.')
+    
+    if not os.path.exists(model_ckpt_path):
+        raise ValueError(f'ckpt_best.pth.tar does not exist in {model_dir}.')
+    
+    with open(model_args_path, 'r') as f:
+        model_kwargs = json.load(f)
+    
+    args = namedtuple('args', model_kwargs)(**model_kwargs)
+
+    model_args = TeMoLLM_Config(lora_config=args.lora_config)
+    model_args.llm_model = args.llm_model
+    model_args.shared_emb_dim = args.shared_emb_dim
+    model_args.freeze_mm = args.freeze_mm
+    model_args.text_emb_layers = args.text_emb_layers
+    model_args.motion_tmr_hidden_size = args.motion_tmr_hidden_size
+    model_args.dataname = args.dataname
+    model_args.lora_config = args.lora_config
+
+    temollm = TeMoLLM.from_pretrained(model_kwargs = model_args, device="cuda")
+    checkpoint = torch.load(model_ckpt_path)
+    temollm.model.load_state_dict(checkpoint['state_dict'], strict=False)
+    
+    temollm = temollm.cuda()
+
+    return temollm
+
+import pickle as pkl
+def load_TeMoLLM_Retrieval(model_dir: str) -> TeMoLLM:
+    model_args_path = os.path.join(model_dir, 'config.json')
+    model_ckpt_path = os.path.join(model_dir, 'ckpt_best.pth.tar')
+    embs_paths = os.path.join(model_dir, 'amass_embeddings.pkl')
+
+    if not os.path.exists(model_args_path):
+        raise ValueError(f'model_args.json does not exist in {model_dir}.')
+    if not os.path.exists(model_ckpt_path):
+        raise ValueError(f'ckpt_best.pth.tar does not exist in {model_dir}.')
+    if not os.path.exists(embs_paths):
+        raise ValueError(f'ckpt_best.pth.tar does not exist in {model_dir}.')
+
+    with open(embs_paths, 'rb') as wf:
+        train_embs_data = pkl.load(wf)
+        path_ = train_embs_data['paths']
+        emb_ = train_embs_data['embeddings']
+
+    emb_matrix = torch.stack(emb_, axis=0)
+    assert len(path_) == emb_matrix.shape[0], (len(path_), emb_matrix.shape[0])    
+
+    with open(model_args_path, 'r') as f:
+        model_kwargs = json.load(f)
+    args = namedtuple('args', model_kwargs)(**model_kwargs)
+    model_args = TeMoLLM_Config(lora_config=args.lora_config)
+    model_args.llm_model = args.llm_model
+    model_args.shared_emb_dim = args.shared_emb_dim
+    model_args.freeze_mm = args.freeze_mm
+    model_args.text_emb_layers = args.text_emb_layers
+    model_args.motion_tmr_hidden_size = args.motion_tmr_hidden_size
+    model_args.dataname = args.dataname
+    model_args.lora_config = args.lora_config
+    temollm = TeMoLLM.from_pretrained(model_kwargs = model_args, device="cuda")
+    checkpoint = torch.load(model_ckpt_path)
+    temollm.model.load_state_dict(checkpoint['state_dict'], strict=False)
+    temollm = temollm.cuda()
+    
+
+    logit_scale = temollm.model.logit_scale.exp()
+    emb_matrix = emb_matrix.to(logit_scale.device)
+    # emb_matrix = torch.tensor(emb_matrix, dtype=logit_scale.dtype).to(logit_scale.device)
+    emb_matrix = emb_matrix / emb_matrix.norm(dim=1, keepdim=True)
+    emb_matrix = logit_scale * emb_matrix
+    temollm.emb_matrix = emb_matrix
+    temollm.path_array = path_
+    return temollm

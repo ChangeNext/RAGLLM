@@ -29,29 +29,6 @@ def save_metric_train(path, metrics):
         f.write("############################################\n")
         f.write(strings)        
 
-# def to_dict(dataset, keyids):
-#     all_data = {
-#     "tokenized_data": [],
-#     "motion_x_dict": [],
-#     "text": [],
-#     "keyid": [],
-#     "sent_emb": [],
-#     "motion_cnn": [],
-#     "caption_len": []
-#     }
-#     for keyid in keyids:
-#         tokenized_data, motion_x_dict, text, keyidss, sent_emb, motion_cnn, caption_len = dataset.load_keyid(keyid)
-    
-#         all_data["tokenized_data"].append(tokenized_data)
-#         all_data["motion_x_dict"].append(motion_x_dict)
-#         all_data["text"].append(text)
-#         all_data["keyid"].append(keyidss)
-#         all_data["sent_emb"].append(sent_emb)
-#         all_data["motion_cnn"].append(motion_cnn)
-#         all_data["caption_len"].append(caption_len)
-        
-#     return all_data
-
 def compute_sim_matrix(model, dataset, keyids, device, batch_size=256):
     device = device
     nsplit = int(np.ceil(len(dataset) / batch_size))
@@ -86,7 +63,7 @@ def compute_sim_matrix(model, dataset, keyids, device, batch_size=256):
 from torch.utils.data import Dataset
 from typing import Optional
 
-def retrieval(protocol, dataset, threshold, model, device, save_dir, batch_size, train_mode, logger, nsim_dataset: Optional[Dataset]=None):
+def retrieval(protocol, dataset, threshold, model, device, save_dir, batch_size, train_mode, logger, nsim_dataset: Dataset=None):
     device = device
     protocol = protocol
     threshold_val  = threshold
@@ -120,12 +97,57 @@ def retrieval(protocol, dataset, threshold, model, device, save_dir, batch_size,
                     model, dataset, dataset.keyids, device=device, batch_size=batch_size
                 )
                 results.update({key: res for key in ["normal", "threshold"]})
-                
+            elif protocol == "nsim":
+                res = compute_sim_matrix(
+                    model, dataset, dataset.keyids, device=device,batch_size=batch_size
+                )
+                results[protocol] = res
+            elif protocol == "guo":
+                keyids = sorted(dataset.keyids)
+                N = len(keyids)
+
+                # make batches of 32
+                idx = np.arange(N)
+                np.random.seed(0)
+                np.random.shuffle(idx)
+                idx_batches = [
+                    idx[32 * i : 32 * (i + 1)] for i in range(len(keyids) // 32)
+                ]
+
+                # split into batches of 32
+                # batched_keyids = [ [32], [32], [...]]
+                results["guo"] = [
+                    compute_sim_matrix(
+                        model,
+                        dataset,
+                        np.array(keyids)[idx_batch],
+                        device=device,
+                        batch_size=batch_size,
+                    )
+                    for idx_batch in idx_batches
+                ]
+
         result = results[protocol]
-        
+
         # Compute the metrics
-        if protocol in ["normal", "threshold", "guo"]:
+        if protocol == "guo":
+            all_metrics = []
+            for x in result:
+                sim_matrix = x["sim_matrix"]
+                metrics = all_contrastive_metrics(sim_matrix, rounding=None)
+                all_metrics.append(metrics)
+
+            avg_metrics = {}
+            for key in all_metrics[0].keys():
+                avg_metrics[key] = round(
+                    float(np.mean([metrics[key] for metrics in all_metrics])), 2
+                )
+
+            metrics = avg_metrics
+            protocol_name = protocol
+        else:
             sim_matrix = result["sim_matrix"]
+
             protocol_name = protocol
             if protocol == "threshold":
                 emb = result["sent_emb"]
@@ -134,17 +156,19 @@ def retrieval(protocol, dataset, threshold, model, device, save_dir, batch_size,
             else:
                 emb, threshold = None, None
             metrics = all_contrastive_metrics(sim_matrix, emb, threshold=threshold)
+
         metrics_list.append(metrics)
         print_latex_metrics(metrics, logger)
 
         metric_name = f"{protocol_name}.yaml"
-            
+
+        os.makedirs(save_dir, exist_ok=True)            
         path = os.path.join(save_dir, metric_name)
         save_metric_train(path, metrics)
         
-    
+    model.train()
     if train_mode:
         return metrics_list
     else:
-        logger.info(f"Testing done, metrics saved in:\n{path}")
+        print(f"Testing done, metrics saved in:\n{save_dir}")
         return metrics
