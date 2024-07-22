@@ -35,7 +35,7 @@ for keyid in keyids:
     start_list.append(annotations[keyid]['annotations'][0]["start"])
     end_list.append(annotations[keyid]['annotations'][0]["end"])
 
-output_data = {"paths" : [], "embeddings" : []}
+output_data = {"paths" : [], "embeddings" : [], "key_id" : []}
 with torch.no_grad():
     for motion_path, key_id, start, end in tqdm(zip(motion_paths, keyid_lists, start_list, end_list)):
         temollm.model.eval()
@@ -49,6 +49,7 @@ with torch.no_grad():
         
         motion_embs = temollm.model.get_motion_embs_cross_attn(motion_x_dict, motion_cnn)
         motion_embs = motion_embs[0, 0, :].cpu().detach()
+        output_data['key_id'].append(key_id)
         output_data['paths'].append(motion_path)
         output_data["embeddings"].append(motion_embs)
 

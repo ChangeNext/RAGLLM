@@ -397,8 +397,12 @@ class TeMoLLM:
                 #Fine the first image that does not error out.
                 try:
                     # seen_motion_idx.append(mot_idx)
+                    temp = []
                     motion = self.path_array[mot_idx]
-                    motion_outputs.append(motion)
+                    ked_id = self.key_id[mot_idx]
+                    temp.append(motion)
+                    temp.append(ked_id)
+                    motion_outputs.append(temp)
                     if len(motion_outputs) == max_mot_per_ret:
                         break
                 except:
@@ -521,9 +525,11 @@ def load_TeMoLLM_Retrieval(model_dir: str) -> TeMoLLM:
         train_embs_data = pkl.load(wf)
         path_ = train_embs_data['paths']
         emb_ = train_embs_data['embeddings']
+        keyid = train_embs_data['key_id']
 
     emb_matrix = torch.stack(emb_, axis=0)
     assert len(path_) == emb_matrix.shape[0], (len(path_), emb_matrix.shape[0])    
+    assert len(keyid) == emb_matrix.shape[0]
 
     with open(model_args_path, 'r') as f:
         model_kwargs = json.load(f)
@@ -544,9 +550,9 @@ def load_TeMoLLM_Retrieval(model_dir: str) -> TeMoLLM:
 
     logit_scale = temollm.model.logit_scale.exp()
     emb_matrix = emb_matrix.to(logit_scale.device)
-    # emb_matrix = torch.tensor(emb_matrix, dtype=logit_scale.dtype).to(logit_scale.device)
     emb_matrix = emb_matrix / emb_matrix.norm(dim=1, keepdim=True)
     emb_matrix = logit_scale * emb_matrix
     temollm.emb_matrix = emb_matrix
     temollm.path_array = path_
+    temollm.key_id = keyid
     return temollm

@@ -14,7 +14,7 @@ from options import option
 
 args = option.get_args_parser()
 date_time_str = datetime.now().strftime("%Y%m%d_%H%M")
-args.save_dir = os.path.join(args.save_dir, f"{args.batch_size}_{args.threshold}_{args.max_length}_{args.shared_emb_dim}_{date_time_str}")
+args.save_dir = os.path.join(args.save_dir, f"{args.batch_size}_{args.threshold}_{args.max_length}_{args.shared_emb_dim}_{args.llm_models}{date_time_str}")
 lora_config = {
     'r': args.lora_rank,
     'bias' : args.lora_bias,
@@ -38,7 +38,7 @@ cnn_motion_loader = VQMotionDataset(unit_length=2**2)
 
 train_dataset = TextMotionDataset(
     path = './dataset/annotations/humanml3d', 
-    split = 'train',
+    split = 'train_half_test_4',
     max_len = args.max_length,
     tokenizer=temollm.model.tokenizer,
     motion_loader = motion_loader,
@@ -49,7 +49,7 @@ train_dataset = TextMotionDataset(
 
 val_dataset = TextMotionDataset(
     path = './dataset/annotations/humanml3d', 
-    split = 'val',
+    split = 'test',
     max_len = args.max_length,
     tokenizer=temollm.model.tokenizer,
     motion_loader = motion_loader,
@@ -73,4 +73,5 @@ temollm.fit(
     dataloader_pin_memory=False,
     do_eval=False,
     lr_scheduler_type = "cosine",
+    weight_decay=0.1,
 )
