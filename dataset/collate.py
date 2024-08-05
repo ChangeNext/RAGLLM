@@ -2,7 +2,7 @@ import torch
 from typing import Any, Dict, List, Tuple, Union, Optional
 from torch import Tensor
 from torch.utils.data import default_collate
-
+from torch.nn.utils.rnn import pad_sequence
 
 def length_to_mask(length, device: torch.device = None) -> Tensor:
     if device is None:
@@ -31,9 +31,11 @@ def collate_tensor_with_padding(batch: List[Tensor]) -> Tensor:
     return canvas
 
 
-def collate_x_dict(lst_x_dict: List, *, device: Optional[str] = None) -> Dict:
+def collate_x_dict(lst_x_dict: List, *, device: Optional[str] = None, bf16=False) -> Dict:
     x = collate_tensor_with_padding([x_dict["x"] for x_dict in lst_x_dict])
     if device is not None:
+        if bf16:
+            x = x.to(torch.bfloat16)
         x = x.to(device)
     length = [x_dict["length"] for x_dict in lst_x_dict]
     mask = length_to_mask(length, device=x.device)

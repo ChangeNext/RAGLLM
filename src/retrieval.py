@@ -1,4 +1,3 @@
-
 import os
 import yaml
 import torch
@@ -29,12 +28,12 @@ def save_metric_train(path, metrics):
         f.write("############################################\n")
         f.write(strings)        
 
-def compute_sim_matrix(model, dataset, keyids, device, batch_size=256):
+def compute_sim_matrix(model, dataset, keyids, device, batch_size=256, bf16=False):
     device = device
     nsplit = int(np.ceil(len(dataset) / batch_size))
     with torch.no_grad():
-        all_data = [dataset.load_keyid(keyid, retrun_dict=True) for keyid in keyids]
-        # all_data = [dataset.load_keyid(keyid) for keyid in keyids]
+        # all_data = [dataset.load_keyid(keyid, retrun_dict=True) for keyid in keyids]
+        all_data = [dataset.load_keyid(keyid) for keyid in keyids]
         all_data_splitted = np.array_split(all_data, nsplit)
         latent_texts = []
         latent_motions = []
@@ -52,9 +51,13 @@ def compute_sim_matrix(model, dataset, keyids, device, batch_size=256):
         latent_motions = torch.cat(latent_motions)
         sent_embs = torch.cat(sent_embs)
         sim_matrix = get_sim_matrix(latent_texts, latent_motions)
-        
+        if bf16:
+            sim_matrix = sim_matrix.to(torch.float32).cpu().numpy()
+        else:
+            sim_matrix = sim_matrix.cpu().numpy()
+
     returned = {
-        "sim_matrix": sim_matrix.cpu().numpy(),
+        "sim_matrix": sim_matrix,
         "sent_emb": sent_embs.cpu().numpy()
     }
     return returned
@@ -63,7 +66,7 @@ def compute_sim_matrix(model, dataset, keyids, device, batch_size=256):
 from torch.utils.data import Dataset
 from typing import Optional
 
-def retrieval(protocol, dataset, threshold, model, device, save_dir, batch_size, train_mode, logger, nsim_dataset: Dataset=None):
+def retrieval(protocol, dataset, threshold, model, device, save_dir, batch_size, train_mode, logger, nsim_dataset, bf16):
     device = device
     protocol = protocol
     threshold_val  = threshold
@@ -94,12 +97,12 @@ def retrieval(protocol, dataset, threshold, model, device, save_dir, batch_size,
         if protocol not in results:
             if protocol in ["normal", "threshold"]:
                 res = compute_sim_matrix(
-                    model, dataset, dataset.keyids, device=device, batch_size=batch_size
+                    model, dataset, dataset.keyids, device=device, batch_size=batch_size, bf16=bf16
                 )
                 results.update({key: res for key in ["normal", "threshold"]})
             elif protocol == "nsim":
                 res = compute_sim_matrix(
-                    model, dataset, dataset.keyids, device=device,batch_size=batch_size
+                    model, dataset, dataset.keyids, device=device,batch_size=batch_size ,bf16=bf16
                 )
                 results[protocol] = res
             elif protocol == "guo":
@@ -123,6 +126,7 @@ def retrieval(protocol, dataset, threshold, model, device, save_dir, batch_size,
                         np.array(keyids)[idx_batch],
                         device=device,
                         batch_size=batch_size,
+                        bf16=bf16
                     )
                     for idx_batch in idx_batches
                 ]

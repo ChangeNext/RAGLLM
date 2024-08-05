@@ -17,7 +17,7 @@ def get_args_parser():
     parser.add_argument('--warmup_steps', default=100, type=int, metavar='N', help='Number of steps before decaying lr.')
     parser.add_argument('--max_length', default=32, type=int, help='text_len')
     parser.add_argument('--input_prompt', default=None, type=str, help="Input prompt for the language model, if any.")
-
+    parser.add_argument('--bf16', action='store_true', help='Use bf16 precision')
     ##TrainingArguments
 
     ## LoRA

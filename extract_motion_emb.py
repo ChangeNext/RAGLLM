@@ -12,9 +12,11 @@ from dataset.data import read_split, load_annotations
 from dataset.collate import collate_x_dict
 from tqdm.auto import tqdm
 import pickle as pkl
+import src.util.utils_model as utils_model
 
-model_dir = "/data/jw/motion/TextMotionRetrieval/TMR_LLM/result/train/64_0.8_32_256_20240720_1356"
-temollm = load_TeMoLLM(model_dir)
+model_dir = "/data/jw/motion/TextMotionRetrieval/TMR_LLM/result/train/32_0.85_32_512_Qwen2-1.5B_True_20240729_0311"
+logger = utils_model.get_logger(model_dir)
+temollm = load_TeMoLLM(model_dir, logger)
 
 nomalizer = Normalizer(base_dir="./dataset/stats/humanml3d/guoh3dfeats", eps=1e-12)
 motion_loader = AMASSMotionLoader(base_dir="./dataset/motions/guoh3dfeats", fps=20.0, normalizer=nomalizer, disable= False, nfeats=263)

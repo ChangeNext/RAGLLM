@@ -195,10 +195,14 @@ class TextMotionDataset(Dataset):
         min_seconds: float = 2.0,
         max_seconds: float = 10.0,
         preload: bool = True,
-    ):
+        return_dict: bool = False,
+    ):  
+        self.retrun_dict = return_dict
         self.tokenizer = tokenizer
         self.max_len = max_len
         self.cnn_motion_loader = cnn_motion_loader
+        self.input_prompt = None
+
         self.collate_fn = collate_text_motion
         self.split = split
         self.keyids = read_split(path, split)
@@ -228,7 +232,7 @@ class TextMotionDataset(Dataset):
     def __len__(self):
         return len(self.keyids)
 
-    def load_keyid(self, keyid, retrun_dict: Optional[bool] = False):
+    def load_keyid(self, keyid):
         annotations = self.annotations[keyid]
 
         # Take the first one for testing/validation
@@ -259,12 +263,14 @@ class TextMotionDataset(Dataset):
             max_length = self.max_len)
 
 
-        if tokenized_data.input_ids[0][-1] not in [self.tokenizer.eos_token_id, self.tokenizer.pad_token_id]:
+        # if tokenized_data.input_ids[0][-1] not in [self.tokenizer.eos_token_id, self.tokenizer.pad_token_id]:
+        #     tokenized_data.input_ids[0][-1] = self.tokenizer.eos_token_id
+        if tokenized_data.input_ids[0][-1] not in [self.tokenizer.eos_token_id]:
             tokenized_data.input_ids[0][-1] = self.tokenizer.eos_token_id
-
+            
         caption_len = tokenized_data.attention_mask[0].sum()
 
-        if retrun_dict:
+        if self.retrun_dict:
             output = {
                 'token' : tokenized_data,
                 "motion_x_dict": motion_x_dict,
@@ -281,132 +287,6 @@ class TextMotionDataset(Dataset):
     def __getitem__(self, index):
         keyid = self.keyids[index]
         return self.load_keyid(keyid)
-    
-    def filter_annotations(self, annotations):
-        filtered_annotations = {}
-        for key, val in annotations.items():
-            annots = val.pop("annotations")
-            filtered_annots = []
-            for annot in annots:
-                duration = annot["end"] - annot["start"]
-                if self.max_seconds >= duration >= self.min_seconds:
-                    filtered_annots.append(annot)
-
-            if filtered_annots:
-                val["annotations"] = filtered_annots
-                filtered_annotations[key] = val
-
-        return filtered_annotations
-
-
-class TextMotion_Dataset(Dataset):
-    def __init__(
-        self,
-        path: str,
-        split: str = "train",
-        motion_loader = None,
-        cnn_motion_loader = None,
-        text_to_sent_emb = None,
-        tokenizer = None,
-        max_len: int = 32,
-        min_seconds: float = 2.0,
-        max_seconds: float = 10.0,
-        preload: bool = True,
-        retrieval_token_idx = 1,
-    ):
-        self.retrieval_token_idx = retrieval_token_idx
-        self.tokenizer = tokenizer
-        self.max_len = max_len
-        self.cnn_motion_loader = cnn_motion_loader
-        self.collate_fn = collate_text_motion
-        self.split = split
-        self.keyids = read_split(path, split)
-        
-        self.text_to_sent_emb = text_to_sent_emb
-        self.motion_loader = motion_loader
-
-        self.min_seconds = min_seconds
-        self.max_seconds = max_seconds
-
-        # remove too short or too long annotations
-        self.annotations = load_annotations(path)
-
-
-        # filter annotations (min/max)
-        # but not for the test set
-        # otherwise it is not fair for everyone
-        if "test" not in split:
-            self.annotations = self.filter_annotations(self.annotations)
-            # self.annotations = self.filter_annotattions_t2m(self)
-
-        self.is_training = split == "train" 
-        self.keyids = [keyid for keyid in self.keyids if keyid in self.annotations]
-
-        # filter windowsize (min/max)
-        # self.keyids = self.cnn_motion_loader.filter_id(self.keyids)
-        self.nfeats = self.motion_loader.nfeats
-        if preload:
-            for _ in tqdm(self, desc="Preloading the dataset"):
-                continue
-            
-    def __len__(self):
-        return len(self.keyids)
-
-    def __getitem__(self, index):
-        keyid = self.keyids[index]
-        return self.load_keyid(keyid)
-
-    def load_keyid(self, keyid):
-        annotations = self.annotations[keyid]
-        # Take the first one for testing/validation
-        # Otherwise take a random one
-        index = 0
-        if self.is_training:
-            index = np.random.randint(len(annotations["annotations"]))
-        annotation = annotations["annotations"][index]
-
-        text = annotation["text"]
-        # motion_x_dict, motion_x_dict_down, motion_x_dict_up = self.motion_loader(
-        #     path=annotations["path"],
-        #     start=annotation["start"],
-        #     end=annotation["end"],
-        #     split = self.split
-        # )
-        motion_x_dict = self.motion_loader(
-            path=annotations["path"],
-            start=annotation["start"],
-            end=annotation["end"],
-            split = self.split
-        )
-        motion_cnn = self.cnn_motion_loader(keyid)
-        sent_emb = self.text_to_sent_emb(text)
-        
-        eos_token = self.tokenizer.eos_token
-        text += eos_token
-        tokenized_data = self.tokenizer(
-            text, 
-            return_tensors='pt',
-            padding = 'max_length',
-            truncation=True,
-            max_length = self.max_len)
-
-        tokens = tokenized_data.input_ids[0]
-        caption_len = tokenized_data.attention_mask[0].sum()
-
-        if tokenized_data.input_ids[0][-1] not in [self.tokenizer.eos_token_id]:
-            tokenized_data.input_ids[0][-1] = self.tokenizer.eos_token_id
-        
-        output = {
-            "tokenized_data" : tokenized_data,
-            "motion_x_dict": motion_x_dict,
-            "text": text,
-            "keyid": keyid,
-            "sent_emb": sent_emb,
-            'token' : tokens,
-            'cnn_motion' : motion_cnn,
-            'caption_len': caption_len,
-        }
-        return output
     
     def filter_annotations(self, annotations):
         filtered_annotations = {}

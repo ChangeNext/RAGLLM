@@ -45,12 +45,13 @@ class ACTORStyleEncoder(nn.Module):
         num_heads: int = 4,
         dropout: float = 0.1,
         activation: str = "gelu",
+        bf16: bool = False,
     ) -> None:
         super().__init__()
 
         self.nfeats = nfeats
         self.projection = nn.Linear(263, 256)
-
+        self.bf16 = bf16
         self.vae = vae
         self.nbtokens = 2 if vae else 1
         self.tokens = nn.Parameter(torch.randn(self.nbtokens, latent_dim))
@@ -73,7 +74,10 @@ class ACTORStyleEncoder(nn.Module):
         )
 
     def forward(self, x_dict: Dict) -> Tensor:
-        x = x_dict["x"]
+        if self.bf16:
+            x = x_dict["x"].to(torch.bfloat16)
+        else:
+            x = x_dict["x"]
         mask = x_dict["mask"]
         
         x = self.projection(x)

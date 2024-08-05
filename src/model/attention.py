@@ -198,7 +198,11 @@ class JointCrossAttentionBlock(nn.Module):
         context_dim = default(context_dim, dim)
 
         self.attn = CrossAttention(dim = dim, context_dim = context_dim, dropout = dropout, **kwargs)
+        
+
+        ####이거 지운거임####
         self.ff = FeedForward(dim, mult = ff_mult, dropout = dropout)
+        ####이거 지운거임####
         # self.context_ff = FeedForward(context_dim, mult = ff_mult, dropout = dropout)
 
     def forward(
@@ -214,7 +218,9 @@ class JointCrossAttentionBlock(nn.Module):
         x = x + attn_out
         # context = context + context_attn_out
 
+        ####이거 지운거임####
         x = self.ff(x) + x
+        ####이거 지운거임####
         # context = self.context_ff(context) + context
 
         return x
